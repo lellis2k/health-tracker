@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "WorktreeCreate": [
+      {
+        "type": "command",
+        "command": ".claude/hooks/block-worktree.sh"
+      }
+    ]
+  }
+}
