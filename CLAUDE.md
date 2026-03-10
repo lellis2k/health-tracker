@@ -114,3 +114,10 @@ Push to GitHub → Vercel auto-deploys to production.
 
 ## Database Schema Location
 See `supabase/schema.sql` — run the full file in the Supabase SQL editor to set up tables and RLS policies.
+
+## Learnings
+_Important gotchas, decisions, and insights discovered during development._
+
+- **middleware.ts → proxy.ts**: Next.js 16 requires the middleware file to be named `proxy.ts` and export `proxy` instead of `middleware`. Critical for session refresh to work on every request.
+- **Auto-push after commit**: Always push to GitHub after committing — Vercel auto-deploys from master, no confirmation needed (sole developer).
+- **Worktree workflow**: Claude Code creates worktrees at `.claude/worktrees/<name>/` for isolated development. Changes should be PR'd or merged back to master.
