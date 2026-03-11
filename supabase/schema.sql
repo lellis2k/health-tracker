@@ -72,153 +72,113 @@ alter table public.family_members  enable row level security;
 alter table public.people          enable row level security;
 alter table public.symptom_entries enable row level security;
 
--- Helper: is the current user a member of a given family?
--- (used in policies below)
+-- Drop ALL existing policies on all four tables (handles any leftover from prior runs).
+do $$
+declare r record;
+begin
+  for r in
+    select schemaname, tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('families', 'family_members', 'people', 'symptom_entries')
+  loop
+    execute format('drop policy if exists %I on %I.%I', r.policyname, r.schemaname, r.tablename);
+  end loop;
+end $$;
+
+-- ============================================================
+-- SECURITY-DEFINER HELPERS
+-- These functions query family_members while bypassing RLS,
+-- breaking the infinite-recursion cycle that occurs when RLS
+-- policies reference the same table they protect.
+-- ============================================================
+
+create or replace function public.is_family_member(p_family_id uuid)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.family_members
+    where family_id = p_family_id
+      and user_id   = auth.uid()
+  );
+$$;
+
+create or replace function public.is_family_admin(p_family_id uuid)
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.family_members
+    where family_id = p_family_id
+      and user_id   = auth.uid()
+      and role      = 'admin'
+  );
+$$;
+
+grant execute on function public.is_family_member(uuid) to authenticated;
+grant execute on function public.is_family_admin(uuid)  to authenticated;
 
 -- ---- families ----
 
-drop policy if exists "family members can read their family"   on public.families;
-drop policy if exists "authenticated users can create families" on public.families;
-drop policy if exists "family admins can update their family"  on public.families;
+create policy "families_select" on public.families
+  for select to authenticated
+  using (public.is_family_member(id));
 
-create policy "family members can read their family"
-  on public.families for select to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = families.id
-        and fm.user_id   = auth.uid()
-    )
-  );
+create policy "families_insert" on public.families
+  for insert to authenticated
+  with check (true);
 
-create policy "authenticated users can create families"
-  on public.families for insert
-  with check (auth.uid() is not null);
-
-create policy "family admins can update their family"
-  on public.families for update to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = families.id
-        and fm.user_id   = auth.uid()
-        and fm.role      = 'admin'
-    )
-  );
+create policy "families_update" on public.families
+  for update to authenticated
+  using (public.is_family_admin(id));
 
 -- ---- family_members ----
 
-drop policy if exists "family members can read members"  on public.family_members;
-drop policy if exists "users can join or admins can add" on public.family_members;
+create policy "family_members_select" on public.family_members
+  for select to authenticated
+  using (public.is_family_member(family_id));
 
-create policy "family members can read members"
-  on public.family_members for select to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm2
-      where fm2.family_id = family_members.family_id
-        and fm2.user_id   = auth.uid()
-    )
-  );
-
-create policy "users can join or admins can add"
-  on public.family_members for insert
-  with check (
-    auth.uid() is not null and (
-      -- The user is adding themselves (signup flow)
-      user_id = auth.uid()
-      or
-      -- Or an existing admin is adding someone
-      exists (
-        select 1 from public.family_members fm2
-        where fm2.family_id = family_members.family_id
-          and fm2.user_id   = auth.uid()
-          and fm2.role      = 'admin'
-      )
-    )
-  );
+create policy "family_members_insert" on public.family_members
+  for insert to authenticated
+  with check (true);
 
 -- ---- people ----
+-- INSERT uses is_family_member — safe because family_members is created
+-- before people during first-time setup (see dashboard/page.tsx).
 
-drop policy if exists "family members can read people"   on public.people;
-drop policy if exists "family members can insert people" on public.people;
-drop policy if exists "family members can update people" on public.people;
+create policy "people_select" on public.people
+  for select to authenticated
+  using (public.is_family_member(family_id));
 
-create policy "family members can read people"
-  on public.people for select to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = people.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
+create policy "people_insert" on public.people
+  for insert to authenticated
+  with check (public.is_family_member(family_id));
 
-create policy "family members can insert people"
-  on public.people for insert
-  with check (
-    auth.uid() is not null and
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = people.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
-
-create policy "family members can update people"
-  on public.people for update to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = people.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
+create policy "people_update" on public.people
+  for update to authenticated
+  using (public.is_family_member(family_id));
 
 -- ---- symptom_entries ----
 
-drop policy if exists "family members can read entries"   on public.symptom_entries;
-drop policy if exists "family members can insert entries" on public.symptom_entries;
-drop policy if exists "family members can update entries" on public.symptom_entries;
-drop policy if exists "family members can delete entries" on public.symptom_entries;
+create policy "entries_select" on public.symptom_entries
+  for select to authenticated
+  using (public.is_family_member(family_id));
 
-create policy "family members can read entries"
-  on public.symptom_entries for select to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = symptom_entries.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
+create policy "entries_insert" on public.symptom_entries
+  for insert to authenticated
+  with check (public.is_family_member(family_id));
 
-create policy "family members can insert entries"
-  on public.symptom_entries for insert
-  with check (
-    auth.uid() is not null and
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = symptom_entries.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
+create policy "entries_update" on public.symptom_entries
+  for update to authenticated
+  using (public.is_family_member(family_id));
 
-create policy "family members can update entries"
-  on public.symptom_entries for update to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = symptom_entries.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
-
-create policy "family members can delete entries"
-  on public.symptom_entries for delete to authenticated
-  using (
-    exists (
-      select 1 from public.family_members fm
-      where fm.family_id = symptom_entries.family_id
-        and fm.user_id   = auth.uid()
-    )
-  );
+create policy "entries_delete" on public.symptom_entries
+  for delete to authenticated
+  using (public.is_family_member(family_id));

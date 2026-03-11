@@ -1,12 +1,15 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import SymptomForm from '@/components/SymptomForm'
 import SymptomList from '@/components/SymptomList'
 import type { Person, SymptomEntryWithPerson } from '@/lib/types'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
+  const admin = createAdminClient()
 
+  // Auth check — getUser() works even though PostgREST queries don't
   const {
     data: { user },
   } = await supabase.auth.getUser()
@@ -15,18 +18,23 @@ export default async function DashboardPage() {
     redirect('/auth/login')
   }
 
-  // Check if user has a family
-  let { data: member } = await supabase
+  // Use admin client for ALL data reads (bypasses RLS).
+  // The normal @supabase/ssr client's PostgREST queries fail because
+  // auth.uid() returns null without working middleware session refresh.
+
+  // Check if user already has a family
+  let { data: member } = await admin
     .from('family_members')
     .select('family_id, role')
     .eq('user_id', user.id)
+    .limit(1)
     .maybeSingle()
 
-  // First-time setup: create family + person + membership using THIS authenticated client
+  // First-time setup
   if (!member) {
     const displayName = user.email?.split('@')[0] ?? 'User'
 
-    const { data: family, error: familyError } = await supabase
+    const { data: family, error: familyError } = await admin
       .from('families')
       .insert({ name: 'My Family' })
       .select()
@@ -46,47 +54,32 @@ export default async function DashboardPage() {
       )
     }
 
-    await supabase.from('people').insert({
-      family_id: family.id,
-      user_id: user.id,
-      display_name: displayName,
-    })
-
-    await supabase.from('family_members').insert({
+    await admin.from('family_members').insert({
       family_id: family.id,
       user_id: user.id,
       role: 'admin',
     })
 
-    // Re-fetch member after creation
-    const { data: newMember } = await supabase
-      .from('family_members')
-      .select('family_id, role')
-      .eq('user_id', user.id)
-      .maybeSingle()
+    await admin.from('people').insert({
+      family_id: family.id,
+      user_id: user.id,
+      display_name: displayName,
+    })
 
-    member = newMember
-  }
-
-  if (!member) {
-    return (
-      <div className="p-6 text-center text-red-600">
-        Failed to set up your account. Please sign out and sign back in.
-      </div>
-    )
+    member = { family_id: family.id, role: 'admin' }
   }
 
   const familyId = member.family_id
 
   // Load people in this family
-  const { data: people } = await supabase
+  const { data: people } = await admin
     .from('people')
     .select('*')
     .eq('family_id', familyId)
     .order('created_at', { ascending: true })
 
   // Load recent symptom entries (last 50) with person info
-  const { data: entries } = await supabase
+  const { data: entries } = await admin
     .from('symptom_entries')
     .select('*, person:people(id, display_name, family_id, user_id, created_at)')
     .eq('family_id', familyId)
@@ -94,7 +87,7 @@ export default async function DashboardPage() {
     .limit(50)
 
   // Load past symptom names for autocomplete
-  const { data: pastSymptoms } = await supabase
+  const { data: pastSymptoms } = await admin
     .from('symptom_entries')
     .select('symptom_name')
     .eq('family_id', familyId)

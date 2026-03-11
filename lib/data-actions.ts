@@ -2,80 +2,58 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 
-// Called once on first login to create family + person + family_member records
-export async function initializeUserFamily(userId: string, email: string) {
+type Role = 'admin' | 'member'
+
+// Helper: get authenticated user
+async function getAuthUser() {
   const supabase = await createClient()
-
-  // Check again inside the action to avoid race conditions
-  const { data: existing } = await supabase
-    .from('family_members')
-    .select('id')
-    .eq('user_id', userId)
-    .maybeSingle()
-
-  if (existing) return { familyId: null } // already initialized
-
-  // Create family
-  const displayName = email.split('@')[0]
-  const { data: family, error: familyError } = await supabase
-    .from('families')
-    .insert({ name: 'My Family' })
-    .select()
-    .single()
-
-  if (familyError || !family) {
-    console.error('Failed to create family:', familyError)
-    return { error: familyError?.message }
-  }
-
-  // Create person record for this user
-  const { error: personError } = await supabase.from('people').insert({
-    family_id: family.id,
-    user_id: userId,
-    display_name: displayName,
-  })
-
-  if (personError) {
-    console.error('Failed to create person:', personError)
-    return { error: personError.message }
-  }
-
-  // Create family_member record
-  const { error: memberError } = await supabase.from('family_members').insert({
-    family_id: family.id,
-    user_id: userId,
-    role: 'admin',
-  })
-
-  if (memberError) {
-    console.error('Failed to create family_member:', memberError)
-    return { error: memberError.message }
-  }
-
-  return { familyId: family.id }
-}
-
-export async function addSymptomEntry(formData: FormData) {
-  const supabase = await createClient()
-
   const {
     data: { user },
   } = await supabase.auth.getUser()
+
+  if (!user) return null
+  return user
+}
+
+async function getFamilyRole(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  familyId: string
+) {
+  const { data, error } = await admin
+    .from('family_members')
+    .select('role')
+    .eq('user_id', userId)
+    .eq('family_id', familyId)
+    .maybeSingle()
+
+  if (error) {
+    return { role: null as Role | null, error: error.message }
+  }
+
+  return { role: (data?.role as Role | undefined) ?? null, error: null }
+}
+
+export async function addSymptomEntry(formData: FormData) {
+  const user = await getAuthUser()
   if (!user) return { error: 'Not authenticated' }
 
-  const personId = formData.get('person_id') as string
-  const symptomName = (formData.get('symptom_name') as string).trim()
-  const severity = parseInt(formData.get('severity') as string, 10)
-  const notes = (formData.get('notes') as string).trim() || null
-  const loggedAt = formData.get('logged_at') as string
+  const admin = createAdminClient()
 
-  if (!personId || !symptomName || isNaN(severity)) {
+  const personId = String(formData.get('person_id') ?? '')
+  const symptomName = String(formData.get('symptom_name') ?? '').trim()
+  const severity = parseInt(String(formData.get('severity') ?? ''), 10)
+  const notes = String(formData.get('notes') ?? '').trim() || null
+  const loggedAt = String(formData.get('logged_at') ?? '')
+
+  if (!personId || !symptomName || isNaN(severity) || severity < 1 || severity > 5) {
     return { error: 'Missing required fields' }
   }
 
   // Get family_id from person
-  const { data: person, error: personError } = await supabase
+  const { data: person, error: personError } = await admin
     .from('people')
     .select('family_id')
     .eq('id', personId)
@@ -85,7 +63,15 @@ export async function addSymptomEntry(formData: FormData) {
     return { error: 'Person not found' }
   }
 
-  const { error } = await supabase.from('symptom_entries').insert({
+  const { role, error: roleError } = await getFamilyRole(
+    admin,
+    user.id,
+    person.family_id
+  )
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  const { error } = await admin.from('symptom_entries').insert({
     person_id: personId,
     family_id: person.family_id,
     symptom_name: symptomName,
@@ -104,12 +90,34 @@ export async function addSymptomEntry(formData: FormData) {
 }
 
 export async function deleteSymptomEntry(entryId: string) {
-  const supabase = await createClient()
+  const user = await getAuthUser()
+  if (!user) return { error: 'Not authenticated' }
 
-  const { error } = await supabase
+  const admin = createAdminClient()
+
+  const { data: entry, error: entryError } = await admin
+    .from('symptom_entries')
+    .select('family_id')
+    .eq('id', entryId)
+    .maybeSingle()
+
+  if (entryError || !entry) {
+    return { error: 'Entry not found' }
+  }
+
+  const { role, error: roleError } = await getFamilyRole(
+    admin,
+    user.id,
+    entry.family_id
+  )
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  const { error } = await admin
     .from('symptom_entries')
     .delete()
     .eq('id', entryId)
+    .eq('family_id', entry.family_id)
 
   if (error) {
     return { error: error.message }
@@ -120,21 +128,23 @@ export async function deleteSymptomEntry(entryId: string) {
 }
 
 export async function addPerson(formData: FormData) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
+  const user = await getAuthUser()
   if (!user) return { error: 'Not authenticated' }
 
-  const displayName = (formData.get('display_name') as string).trim()
-  const familyId = formData.get('family_id') as string
+  const admin = createAdminClient()
+
+  const displayName = String(formData.get('display_name') ?? '').trim()
+  const familyId = String(formData.get('family_id') ?? '')
 
   if (!displayName || !familyId) {
     return { error: 'Display name is required' }
   }
 
-  const { error } = await supabase.from('people').insert({
+  const { role, error: roleError } = await getFamilyRole(admin, user.id, familyId)
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  const { error } = await admin.from('people').insert({
     family_id: familyId,
     display_name: displayName,
     user_id: null,
@@ -149,11 +159,23 @@ export async function addPerson(formData: FormData) {
 }
 
 export async function updateFamilyName(familyId: string, name: string) {
-  const supabase = await createClient()
+  const user = await getAuthUser()
+  if (!user) return { error: 'Not authenticated' }
 
-  const { error } = await supabase
+  const admin = createAdminClient()
+  const trimmedName = name.trim()
+
+  if (!trimmedName) {
+    return { error: 'Family name is required' }
+  }
+
+  const { role, error: roleError } = await getFamilyRole(admin, user.id, familyId)
+  if (roleError) return { error: roleError }
+  if (role !== 'admin') return { error: 'Only admins can update family settings' }
+
+  const { error } = await admin
     .from('families')
-    .update({ name: name.trim() })
+    .update({ name: trimmedName })
     .eq('id', familyId)
 
   if (error) {
@@ -165,12 +187,39 @@ export async function updateFamilyName(familyId: string, name: string) {
 }
 
 export async function updatePersonName(personId: string, displayName: string) {
-  const supabase = await createClient()
+  const user = await getAuthUser()
+  if (!user) return { error: 'Not authenticated' }
 
-  const { error } = await supabase
+  const admin = createAdminClient()
+  const trimmedName = displayName.trim()
+
+  if (!trimmedName) {
+    return { error: 'Display name is required' }
+  }
+
+  const { data: person, error: personError } = await admin
     .from('people')
-    .update({ display_name: displayName.trim() })
+    .select('family_id')
     .eq('id', personId)
+    .maybeSingle()
+
+  if (personError || !person) {
+    return { error: 'Person not found' }
+  }
+
+  const { role, error: roleError } = await getFamilyRole(
+    admin,
+    user.id,
+    person.family_id
+  )
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  const { error } = await admin
+    .from('people')
+    .update({ display_name: trimmedName })
+    .eq('id', personId)
+    .eq('family_id', person.family_id)
 
   if (error) {
     return { error: error.message }

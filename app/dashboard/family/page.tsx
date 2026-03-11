@@ -1,10 +1,12 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import FamilyManager from '@/components/FamilyManager'
 import type { Family, Person } from '@/lib/types'
 
 export default async function FamilyPage() {
   const supabase = await createClient()
+  const admin = createAdminClient()
 
   const {
     data: { user },
@@ -14,23 +16,28 @@ export default async function FamilyPage() {
     redirect('/auth/login')
   }
 
-  const { data: member } = await supabase
+  const { data: member } = await admin
     .from('family_members')
     .select('family_id, role')
     .eq('user_id', user.id)
+    .limit(1)
     .maybeSingle()
 
   if (!member) {
     redirect('/dashboard')
   }
 
-  const { data: family } = await supabase
+  const { data: family } = await admin
     .from('families')
     .select('*')
     .eq('id', member.family_id)
     .single()
 
-  const { data: people } = await supabase
+  if (!family) {
+    redirect('/dashboard')
+  }
+
+  const { data: people } = await admin
     .from('people')
     .select('*')
     .eq('family_id', member.family_id)

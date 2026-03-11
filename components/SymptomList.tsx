@@ -39,6 +39,7 @@ function formatDate(isoString: string) {
 export default function SymptomList({ entries, people }: SymptomListProps) {
   const [filterPerson, setFilterPerson] = useState<string>('all')
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
   const filtered =
@@ -48,9 +49,13 @@ export default function SymptomList({ entries, people }: SymptomListProps) {
 
   function handleDelete(entryId: string) {
     if (!confirm('Delete this symptom entry?')) return
+    setError(null)
     setDeleting(entryId)
     startTransition(async () => {
-      await deleteSymptomEntry(entryId)
+      const result = await deleteSymptomEntry(entryId)
+      if (result?.error) {
+        setError(result.error)
+      }
       setDeleting(null)
     })
   }
@@ -65,6 +70,12 @@ export default function SymptomList({ entries, people }: SymptomListProps) {
 
   return (
     <div className="space-y-3">
+      {error && (
+        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 ring-1 ring-red-200">
+          {error}
+        </div>
+      )}
+
       {/* Person filter (only show if >1 person) */}
       {people.length > 1 && (
         <div className="flex gap-2 flex-wrap">
