@@ -53,6 +53,17 @@ create index if not exists family_members_user
   on public.family_members (user_id);
 
 -- ============================================================
+-- GRANTS
+-- Supabase does not always apply default privileges to manually-created tables.
+-- Explicitly grant table-level permissions so RLS policies can function correctly.
+-- ============================================================
+
+grant all on table public.families        to anon, authenticated, service_role;
+grant all on table public.family_members  to anon, authenticated, service_role;
+grant all on table public.people          to anon, authenticated, service_role;
+grant all on table public.symptom_entries to anon, authenticated, service_role;
+
+-- ============================================================
 -- ROW LEVEL SECURITY
 -- ============================================================
 
@@ -81,8 +92,8 @@ create policy "family members can read their family"
   );
 
 create policy "authenticated users can create families"
-  on public.families for insert to authenticated
-  with check (true);
+  on public.families for insert
+  with check (auth.uid() is not null);
 
 create policy "family admins can update their family"
   on public.families for update to authenticated
@@ -111,17 +122,19 @@ create policy "family members can read members"
   );
 
 create policy "users can join or admins can add"
-  on public.family_members for insert to authenticated
+  on public.family_members for insert
   with check (
-    -- The user is adding themselves (signup flow)
-    user_id = auth.uid()
-    or
-    -- Or an existing admin is adding someone
-    exists (
-      select 1 from public.family_members fm2
-      where fm2.family_id = family_members.family_id
-        and fm2.user_id   = auth.uid()
-        and fm2.role      = 'admin'
+    auth.uid() is not null and (
+      -- The user is adding themselves (signup flow)
+      user_id = auth.uid()
+      or
+      -- Or an existing admin is adding someone
+      exists (
+        select 1 from public.family_members fm2
+        where fm2.family_id = family_members.family_id
+          and fm2.user_id   = auth.uid()
+          and fm2.role      = 'admin'
+      )
     )
   );
 
@@ -142,8 +155,9 @@ create policy "family members can read people"
   );
 
 create policy "family members can insert people"
-  on public.people for insert to authenticated
+  on public.people for insert
   with check (
+    auth.uid() is not null and
     exists (
       select 1 from public.family_members fm
       where fm.family_id = people.family_id
@@ -179,8 +193,9 @@ create policy "family members can read entries"
   );
 
 create policy "family members can insert entries"
-  on public.symptom_entries for insert to authenticated
+  on public.symptom_entries for insert
   with check (
+    auth.uid() is not null and
     exists (
       select 1 from public.family_members fm
       where fm.family_id = symptom_entries.family_id
