@@ -1,6 +1,5 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { initializeUserFamily } from '@/lib/data-actions'
 import SymptomForm from '@/components/SymptomForm'
 import SymptomList from '@/components/SymptomList'
 import type { Person, SymptomEntryWithPerson } from '@/lib/types'
@@ -16,28 +15,63 @@ export default async function DashboardPage() {
     redirect('/auth/login')
   }
 
-  // Check if user has a family; create one if not
-  const { data: memberRecord } = await supabase
+  // Check if user has a family
+  let { data: member } = await supabase
     .from('family_members')
     .select('family_id, role')
     .eq('user_id', user.id)
     .maybeSingle()
 
-  if (!memberRecord) {
-    await initializeUserFamily(user.id, user.email ?? 'user')
+  // First-time setup: create family + person + membership using THIS authenticated client
+  if (!member) {
+    const displayName = user.email?.split('@')[0] ?? 'User'
+
+    const { data: family, error: familyError } = await supabase
+      .from('families')
+      .insert({ name: 'My Family' })
+      .select()
+      .single()
+
+    if (familyError || !family) {
+      console.error('Failed to create family:', familyError)
+      return (
+        <div className="p-6 text-center">
+          <p className="text-red-600">
+            Failed to set up your account ({familyError?.message ?? 'unknown error'}).
+          </p>
+          <p className="mt-2 text-sm text-gray-500">
+            Please sign out and sign back in, then try again.
+          </p>
+        </div>
+      )
+    }
+
+    await supabase.from('people').insert({
+      family_id: family.id,
+      user_id: user.id,
+      display_name: displayName,
+    })
+
+    await supabase.from('family_members').insert({
+      family_id: family.id,
+      user_id: user.id,
+      role: 'admin',
+    })
+
+    // Re-fetch member after creation
+    const { data: newMember } = await supabase
+      .from('family_members')
+      .select('family_id, role')
+      .eq('user_id', user.id)
+      .maybeSingle()
+
+    member = newMember
   }
-
-  // Re-fetch after potential init
-  const { data: member } = await supabase
-    .from('family_members')
-    .select('family_id, role')
-    .eq('user_id', user.id)
-    .maybeSingle()
 
   if (!member) {
     return (
       <div className="p-6 text-center text-red-600">
-        Failed to set up your account. Please refresh the page.
+        Failed to set up your account. Please sign out and sign back in.
       </div>
     )
   }

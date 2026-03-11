@@ -36,7 +36,14 @@ export async function proxy(request: NextRequest) {
   if (!user && pathname.startsWith('/dashboard')) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'
-    return NextResponse.redirect(url)
+    const redirectResponse = NextResponse.redirect(url)
+    // Clear stale Supabase auth cookies so the next sign-in starts clean
+    request.cookies.getAll().forEach((cookie) => {
+      if (cookie.name.startsWith('sb-')) {
+        redirectResponse.cookies.delete(cookie.name)
+      }
+    })
+    return redirectResponse
   }
 
   // Redirect authenticated users away from auth pages
@@ -51,6 +58,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|icon|apple-icon|manifest|sw.js|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|icon|apple-icon|manifest|sw.js|.*\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
