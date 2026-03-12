@@ -1,5 +1,12 @@
 # Health Tracker — Project Conventions
 
+## Agent Instructions
+After completing any task that changes architecture, conventions, file structure, env vars, deployment, or security:
+1. Update the relevant sections of **this file** (CLAUDE.md)
+2. Update **MEMORY.md** at `C:\Users\leigh.ellis.LNTCAREDEVS\.claude\projects\C--Projects-health-tracker\memory\MEMORY.md`
+
+Do this before ending the session or moving to the next task. Do not wait to be reminded.
+
 ## Overview
 Family health symptom tracking PWA built with Next.js 16, Supabase, and Tailwind CSS v4.
 
@@ -12,12 +19,29 @@ Family health symptom tracking PWA built with Next.js 16, Supabase, and Tailwind
 
 ## Key Architectural Decisions
 
-### Auth & Session Management
-- Uses `@supabase/ssr` for server-side session handling with cookies
-- `proxy.ts` (Next.js 16 renamed `middleware.ts` → `proxy.ts`, export `proxy` not `middleware`) refreshes the session token on every request (critical for persistence)
-- Server components use `createServerClient` from `lib/supabase/server.ts`
-- Client components use `createBrowserClient` from `lib/supabase/client.ts`
-- Server actions in `lib/auth-actions.ts` and `lib/data-actions.ts`
+### Auth & Data Access (Dual-Client Pattern)
+The app uses **two Supabase clients** with different roles:
+
+1. **SSR client** (`lib/supabase/server.ts` → `createClient`)
+   - Uses `@supabase/ssr` with cookie-based sessions
+   - Used **only** for `supabase.auth.getUser()` (auth verification)
+   - PostgREST queries via this client fail (see "Why Not RLS?" below)
+
+2. **Admin client** (`lib/supabase/admin.ts` → `createAdminClient`)
+   - Uses `SUPABASE_SERVICE_ROLE_KEY` (server-only, bypasses RLS)
+   - Used for **all data reads and mutations** (families, people, symptom_entries)
+   - Server actions enforce authorization manually via `getFamilyRole()` helper
+   - Protected by `import 'server-only'` — cannot be imported in client components
+
+3. **Browser client** (`lib/supabase/client.ts` → `createClient`)
+   - Used in client components (currently unused for data, only auth state if needed)
+
+### Why Not RLS?
+The `@supabase/ssr` client's PostgREST queries return `auth.uid() = null` in Next.js 16 server components. Root cause: the `setAll` cookie callback silently fails in server components (read-only cookies), causing the SSR client to drop the JWT session for PostgREST calls even though `getUser()` still works via the Auth API.
+
+**Workaround**: All data access goes through the admin client. Authorization is enforced in application code (server actions check `getFamilyRole()` before every mutation).
+
+RLS policies and `SECURITY DEFINER` helper functions remain in `schema.sql` for defense-in-depth.
 
 ### Data Model (Family-Scoped)
 - **families**: A group of related users/people. All symptom data is scoped to the family.
@@ -46,14 +70,24 @@ Currently: families are created per-user at signup. Schema is ready for merging 
 - `components/ServiceWorkerRegistration.tsx` → Client component that registers SW
 
 ### Data Flow
-- Protected pages: Server component → checks auth → passes data as props to client components
-- Mutations: Client component → calls server action → server action revalidates path
+- Protected pages: Server component → checks auth via SSR client → reads data via admin client → passes as props to client components
+- Mutations: Client component → calls server action → action verifies auth (SSR client) → checks role (admin client) → mutates (admin client) → revalidates path
 - No client-side data fetching (all via server components + server actions)
+
+## Security
+
+### Auth & Sign-Ups
+- **Public sign-ups disabled** in Supabase Dashboard → Authentication → Sign In / Providers → "Allow new users to sign up" = OFF
+- Users invited via Supabase Dashboard → Authentication → Users → "Invite user"
+- Invited users get a magic link email, click it to confirm, account auto-created on first app visit
+- Sign-up UI removed from `components/AuthForm.tsx` (sign-in only)
 
 ## Environment Variables
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://ltqznwemxgwwnpemmsin.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+SUPABASE_SERVICE_ROLE_KEY=<service role key — server-only, no NEXT_PUBLIC_ prefix>
+NEXT_PUBLIC_SITE_URL=<production URL or http://localhost:3000 for dev>
 ```
 Set in `.env.local` for local dev, in Vercel dashboard for production.
 
@@ -67,27 +101,28 @@ app/
   apple-icon.tsx      Apple touch icon
   globals.css         Tailwind v4 import + minimal globals
   auth/
-    login/page.tsx    Sign in / Sign up form (server + client)
+    login/page.tsx    Sign in form (server + client)
     callback/route.ts Auth callback for email confirmation links
   dashboard/
     layout.tsx        Protected layout (auth guard)
-    page.tsx          Main dashboard (symptom form + list)
-    family/page.tsx   Family management (people, invite)
+    page.tsx          Main dashboard (symptom form + list, first-time setup)
+    family/page.tsx   Family management (people, rename family)
 components/
-  AuthForm.tsx        Sign in / Sign up UI (client)
+  AuthForm.tsx        Sign in UI (client, sign-up removed)
   SymptomForm.tsx     Symptom logging form (client)
-  SymptomList.tsx     Symptom entry list (client, gets data from server)
-  PersonSelector.tsx  Person picker component (client)
+  SymptomList.tsx     Symptom entry list with delete + error handling (client)
+  FamilyManager.tsx   Family settings UI (client)
   Navbar.tsx          Top navigation bar (client)
   ServiceWorkerRegistration.tsx  Registers SW on mount (client)
 lib/
   supabase/
     client.ts         Browser Supabase client (createBrowserClient)
     server.ts         Server Supabase client (createServerClient + cookies)
+    admin.ts          Admin Supabase client (service_role key, bypasses RLS, server-only)
   types.ts            Shared TypeScript types/interfaces
-  auth-actions.ts     Server actions: signIn, signUp, signOut
-  data-actions.ts     Server actions: CRUD for symptoms, people, family
-middleware.ts         Session refresh middleware
+  auth-actions.ts     Server actions: signIn, signOut
+  data-actions.ts     Server actions: CRUD for symptoms, people, family (uses admin client)
+proxy.ts              Session refresh middleware (Next.js 16 convention)
 public/
   sw.js               Basic service worker
 supabase/
@@ -112,8 +147,14 @@ npm run lint   # ESLint
 ```
 Push to GitHub → Vercel auto-deploys to production.
 
+## Production
+- **Vercel URL**: https://health-tracker-nine-ashen.vercel.app
+- **Supabase Auth URL config** (set in Supabase Dashboard → Authentication → URL Configuration):
+  - Site URL: `https://health-tracker-nine-ashen.vercel.app`
+  - Redirect URLs: `https://health-tracker-nine-ashen.vercel.app/auth/callback`, `http://localhost:3000/auth/callback`
+
 ## Database Schema Location
-See `supabase/schema.sql` — run the full file in the Supabase SQL editor to set up tables and RLS policies.
+See `supabase/schema.sql` — run the full file in the Supabase SQL editor to set up tables, grants, RLS policies, and helper functions.
 
 ## Learnings
 _Important gotchas, decisions, and insights discovered during development._
@@ -121,3 +162,9 @@ _Important gotchas, decisions, and insights discovered during development._
 - **middleware.ts → proxy.ts**: Next.js 16 requires the middleware file to be named `proxy.ts` and export `proxy` instead of `middleware`. Critical for session refresh to work on every request.
 - **Auto-push after commit**: Always push to GitHub after committing — Vercel auto-deploys from master, no confirmation needed (sole developer).
 - **Worktree workflow**: Claude Code creates worktrees at `.claude/worktrees/<name>/` for isolated development. Changes should be PR'd or merged back to master.
+- **RLS + @supabase/ssr broken in server components**: `auth.uid()` returns null in PostgREST queries made from Next.js server components. Root cause: the `setAll` cookie callback silently fails in read-only server component context, causing the SSR client to drop the JWT session for PostgREST while `getUser()` still works (different code path). Workaround: use admin client (`service_role` key) for all data access, enforce authorization in application code.
+- **Supabase RLS infinite recursion**: Policies on `family_members` that reference `family_members` itself cause infinite recursion. Fixed with `SECURITY DEFINER` helper functions (`is_family_member`, `is_family_admin`) that bypass RLS when checking membership.
+- **Supabase GRANT required**: Manually-created tables need explicit `GRANT ALL ... TO authenticated, anon, service_role` — Supabase does not always apply default privileges.
+- **First-time setup order**: Must insert `family_members` BEFORE `people` — the people INSERT RLS policy checks for an existing family_members row.
+- **Admin client authorization pattern**: Every server action: (1) verify auth via SSR client `getUser()`, (2) check family role via `getFamilyRole()` with admin client, (3) perform mutation with admin client. The `admin.ts` module uses `import 'server-only'` to prevent accidental client-side import.
+- **Public sign-ups disabled**: Turn off "Allow new users to sign up" in Supabase for security. Invite users via Dashboard instead. Removed sign-up tab from UI.
