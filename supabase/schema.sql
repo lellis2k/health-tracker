@@ -192,3 +192,113 @@ create policy "entries_update" on public.symptom_entries
 create policy "entries_delete" on public.symptom_entries
   for delete to authenticated
   using (public.is_family_member(family_id));
+
+-- ============================================================
+-- MEDICATION TRACKING TABLES
+-- ============================================================
+
+create table if not exists public.medications (
+  id              uuid primary key default gen_random_uuid(),
+  person_id       uuid not null references public.people(id) on delete cascade,
+  family_id       uuid not null references public.families(id) on delete cascade,
+  medication_name text not null,
+  dosage          text,                                          -- e.g. "500mg", "10ml"
+  frequency       text not null default 'as_needed'
+                    check (frequency in (
+                      'once_daily', 'twice_daily', 'three_daily',
+                      'four_daily', 'every_8_hours', 'every_12_hours',
+                      'as_needed', 'other'
+                    )),
+  frequency_notes text,                                          -- free text for "other" or details
+  med_type        text not null default 'otc'
+                    check (med_type in ('prescribed', 'otc')),
+  prescriber      text,                                          -- doctor name, only if prescribed
+  start_date      date,                                          -- when started taking
+  end_date        date,                                          -- planned end date (optional)
+  is_active       boolean not null default true,                 -- false = completed/discontinued
+  discontinued_at timestamptz,                                   -- when marked inactive
+  notes           text,
+  created_by      uuid references auth.users(id) on delete set null,
+  logged_at       timestamptz not null default now(),            -- server-set, for ordering
+  created_at      timestamptz not null default now()
+);
+
+create table if not exists public.medication_doses (
+  id              uuid primary key default gen_random_uuid(),
+  medication_id   uuid not null references public.medications(id) on delete cascade,
+  family_id       uuid not null references public.families(id) on delete cascade,
+  taken_at        timestamptz not null,                          -- when the dose was taken
+  notes           text,
+  created_by      uuid references auth.users(id) on delete set null,
+  logged_at       timestamptz not null default now(),
+  created_at      timestamptz not null default now()
+);
+
+-- Indexes
+create index if not exists medications_family_logged
+  on public.medications (family_id, logged_at desc);
+
+create index if not exists medications_person
+  on public.medications (person_id);
+
+create index if not exists medication_doses_medication
+  on public.medication_doses (medication_id, taken_at desc);
+
+create index if not exists medication_doses_family
+  on public.medication_doses (family_id, taken_at desc);
+
+-- Grants
+grant all on table public.medications      to anon, authenticated, service_role;
+grant all on table public.medication_doses to anon, authenticated, service_role;
+
+-- RLS
+alter table public.medications      enable row level security;
+alter table public.medication_doses enable row level security;
+
+-- Drop existing medication policies if re-running
+do $$
+declare r record;
+begin
+  for r in
+    select schemaname, tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in ('medications', 'medication_doses')
+  loop
+    execute format('drop policy if exists %I on %I.%I', r.policyname, r.schemaname, r.tablename);
+  end loop;
+end $$;
+
+-- Policies: medications
+create policy "medications_select" on public.medications
+  for select to authenticated
+  using (public.is_family_member(family_id));
+
+create policy "medications_insert" on public.medications
+  for insert to authenticated
+  with check (public.is_family_member(family_id));
+
+create policy "medications_update" on public.medications
+  for update to authenticated
+  using (public.is_family_member(family_id));
+
+create policy "medications_delete" on public.medications
+  for delete to authenticated
+  using (public.is_family_member(family_id));
+
+-- Policies: medication_doses
+create policy "medication_doses_select" on public.medication_doses
+  for select to authenticated
+  using (public.is_family_member(family_id));
+
+create policy "medication_doses_insert" on public.medication_doses
+  for insert to authenticated
+  with check (public.is_family_member(family_id));
+
+create policy "medication_doses_update" on public.medication_doses
+  for update to authenticated
+  using (public.is_family_member(family_id));
+
+create policy "medication_doses_delete" on public.medication_doses
+  for delete to authenticated
+  using (public.is_family_member(family_id));

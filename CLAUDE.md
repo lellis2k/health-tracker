@@ -8,7 +8,7 @@ After completing any task that changes architecture, conventions, file structure
 Do this before ending the session or moving to the next task. Do not wait to be reminded.
 
 ## Overview
-Family health symptom tracking PWA built with Next.js 16, Supabase, and Tailwind CSS v4.
+Family health symptom and medication tracking PWA built with Next.js 16, Supabase, and Tailwind CSS v4.
 
 ## Tech Stack
 - **Framework**: Next.js 16 (App Router, TypeScript)
@@ -29,8 +29,8 @@ The app uses **two Supabase clients** with different roles:
 
 2. **Admin client** (`lib/supabase/admin.ts` → `createAdminClient`)
    - Uses `SUPABASE_SERVICE_ROLE_KEY` (server-only, bypasses RLS)
-   - Used for **all data reads and mutations** (families, people, symptom_entries)
-   - Server actions enforce authorization manually via `getFamilyRole()` helper
+   - Used for **all data reads and mutations** (families, people, symptom_entries, medications, medication_doses)
+   - Server actions enforce authorization manually via `getFamilyRole()` helper (shared from `lib/action-helpers.ts`)
    - Protected by `import 'server-only'` — cannot be imported in client components
 
 3. **Browser client** (`lib/supabase/client.ts` → `createClient`)
@@ -53,7 +53,15 @@ RLS policies and `SECURITY DEFINER` helper functions remain in `schema.sql` for 
   - `is_resolved` (boolean, default false): whether the symptom has ended
   - `resolved_at` (timestamptz, nullable): when it was resolved; stored as `YYYY-MM-DDT12:00:00.000Z` (noon UTC keeps date correct across UTC±12)
   - `logged_at`: server-set system timestamp (now()) — used for list ordering only, never shown to users
-- All users in a family see all symptoms for all people in that family
+- **medications**: Medication records, scoped to `person_id` and `family_id`
+  - `medication_name`, `dosage`, `frequency` (enum: once_daily, twice_daily, etc.), `med_type` (prescribed/otc)
+  - `prescriber` (nullable): doctor name, only for prescribed medications
+  - `start_date`, `end_date` (nullable): course dates
+  - `is_active` (boolean, default true) + `discontinued_at` (timestamptz): mirrors symptom resolved pattern
+- **medication_doses**: Individual dose records, scoped to `medication_id` and `family_id`
+  - `taken_at` (timestamptz): actual moment the dose was taken (full ISO timestamp, NOT noon-normalized)
+  - `notes` (nullable): e.g. "took with food"
+- All users in a family see all symptoms and medications for all people in that family
 
 ### First-Time Setup Flow
 When a user logs in for the first time (no `family_members` record exists):
@@ -109,12 +117,15 @@ app/
     callback/route.ts Auth callback for email confirmation links
   dashboard/
     layout.tsx        Protected layout (auth guard)
-    page.tsx          Main dashboard (symptom form + list, first-time setup)
+    page.tsx          Tabbed dashboard (symptoms | medications, first-time setup)
     family/page.tsx   Family management (people, rename family)
 components/
   AuthForm.tsx        Sign in UI (client, sign-up removed)
+  DashboardTabs.tsx   Tab switcher for symptoms/medications (client)
   SymptomForm.tsx     Symptom logging form — "Started on" + "Ended on" date pair (client)
   SymptomList.tsx     Symptom list: inline edit, inline resolve date picker, filters (client)
+  MedicationForm.tsx  Medication logging form — name, dosage, frequency, type, dates (client)
+  MedicationList.tsx  Medication list: dose logging, inline edit, discontinue, dose history (client)
   FamilyManager.tsx   Family settings UI (client)
   Navbar.tsx          Top navigation bar (client)
   ServiceWorkerRegistration.tsx  Registers SW on mount (client)
@@ -123,10 +134,12 @@ lib/
     client.ts         Browser Supabase client (createBrowserClient)
     server.ts         Server Supabase client (createServerClient + cookies)
     admin.ts          Admin Supabase client (service_role key, bypasses RLS, server-only)
-  types.ts            Shared TypeScript types/interfaces
+  types.ts            Shared TypeScript types/interfaces (symptoms + medications)
   utils.ts            Shared utilities (todayDateString — local-time YYYY-MM-DD)
+  action-helpers.ts   Shared server action helpers (getAuthUser, getFamilyRole)
   auth-actions.ts     Server actions: signIn, signOut
   data-actions.ts     Server actions: CRUD for symptoms, people, family (uses admin client)
+  medication-actions.ts Server actions: CRUD for medications + doses (uses admin client)
 proxy.ts              Session refresh middleware (Next.js 16 convention)
 public/
   sw.js               Basic service worker
@@ -179,3 +192,8 @@ _Important gotchas, decisions, and insights discovered during development._
 - **Backfill migration**: Ran `UPDATE symptom_entries SET onset_date = (logged_at AT TIME ZONE 'Europe/London')::date WHERE onset_date IS NULL` to migrate old entries to the duration tracking feature.
 - **Edit existing entries**: `updateSymptomEntry(entryId, formData)` server action updates symptom_name, severity, notes, onset_date, is_resolved, resolved_at. Inline edit form in SymptomList (pencil icon on hover).
 - **resolveSymptomEntry now takes a date**: Signature is `resolveSymptomEntry(entryId: string, resolvedDate: string)`. The "Mark resolved" button shows an inline date picker (defaults today, backdatable to onset_date) before calling the action.
+- **Tabbed dashboard**: Dashboard uses `?tab=symptoms` / `?tab=medications` query param for tab state. Server component reads `searchParams` to load only the active tab's data. Default tab is symptoms.
+- **Shared auth helpers**: `getAuthUser()` and `getFamilyRole()` extracted to `lib/action-helpers.ts` — imported by both `data-actions.ts` and `medication-actions.ts`.
+- **Medication dose timestamps**: Unlike dates in symptom_entries (noon-UTC), medication dose `taken_at` is a real ISO timestamp (actual moment). This is because doses represent specific moments in time for "time since last dose" calculations.
+- **Medication frequency**: Stored as CHECK-constrained enum string (once_daily, twice_daily, three_daily, four_daily, every_8_hours, every_12_hours, as_needed, other). `frequency_notes` for free-text when "other".
+- **Medication discontinuation**: Mirrors symptom resolution — `is_active` boolean + `discontinued_at` timestamptz (noon-UTC convention). `reactivateMedication()` can undo discontinuation.

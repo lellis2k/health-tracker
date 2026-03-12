@@ -8,7 +8,7 @@ Context: considering medication tracking/reminders, but validating what to impro
 
 1. Auth/session hardening (remove admin-client-first data access pattern)
 - Status: `Discussed, not implementing yet`
-- Current thought: wants a clear explanation before deciding.
+- Current thought: principle is sound, but complexity is medium-high. Hold until codebase grows or team expands.
 
 2. Automated tests
 - Status: `Deferred`
@@ -30,11 +30,23 @@ Context: considering medication tracking/reminders, but validating what to impro
 - Status: `Deferred with risk accepted`
 - Current thought: personal-use scope lowers urgency; will add if/when needed.
 
-### Why item 1 exists
+### Why item 1 exists — detailed analysis (2026-03-12)
 
-Right now the app reads/writes data using the Supabase service role in server code, then does authorization checks in app logic. That works, but it means a code mistake can expose or modify data across families because service-role bypasses RLS completely.
+**ChatGPT's suggestion is architecturally correct in principle** — RLS enforces family boundaries at the DB layer regardless of app bugs, and service-role has unlimited blast radius.
 
-Moving back to normal user-scoped Supabase access (with working session propagation + RLS enforcement) reduces blast radius and makes the database enforce isolation automatically, not just application code.
+**But the admin-client pattern exists for a real technical reason, not laziness.** The `@supabase/ssr` client's `setAll` cookie callback silently fails in Next.js 16 server components (cookies are read-only there), so `auth.uid()` returns null in PostgREST queries even though `getUser()` still works. RLS can't enforce anything if it can't see who the user is.
+
+**The real fix is a two-step job:**
+1. Solve JWT propagation — manually extract the access token from cookies and inject it as `Authorization: Bearer <token>` instead of relying on the broken `setAll` path. This makes `auth.uid()` work in PostgREST.
+2. Then switch data access to the SSR client and let RLS do the enforcement, removing manual `getFamilyRole()` checks.
+
+**Migration complexity: medium-high.**
+- Every data access path in `data-actions.ts` needs rewriting
+- RLS policies in `schema.sql` must cover every query pattern (gaps are silent — return empty rows, not errors)
+- First-login setup still needs the admin client (bootstrapping — no `family_members` row yet)
+- Needs careful testing with two users in the same family
+
+**Current recommendation:** Don't migrate yet. The existing pattern is consistently applied and well-documented. Reconsider if the codebase grows (more actions = more chances to miss the auth-check pattern) or more developers join.
 
 ### Risks if item 6 stays deferred (personal-use mode)
 

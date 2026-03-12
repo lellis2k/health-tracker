@@ -57,3 +57,71 @@ export const SEVERITY_CLASSES: Record<number, string> = {
   4: 'bg-orange-100 text-orange-800',
   5: 'bg-red-100 text-red-800',
 }
+
+// ============================================================
+// MEDICATION TRACKING
+// ============================================================
+
+export type MedicationFrequency =
+  | 'once_daily'
+  | 'twice_daily'
+  | 'three_daily'
+  | 'four_daily'
+  | 'every_8_hours'
+  | 'every_12_hours'
+  | 'as_needed'
+  | 'other'
+
+export type MedicationType = 'prescribed' | 'otc'
+
+export interface Medication {
+  id: string
+  person_id: string
+  family_id: string
+  medication_name: string
+  dosage: string | null
+  frequency: MedicationFrequency
+  frequency_notes: string | null
+  med_type: MedicationType
+  prescriber: string | null
+  start_date: string | null
+  end_date: string | null
+  is_active: boolean
+  discontinued_at: string | null
+  notes: string | null
+  created_by: string | null
+  logged_at: string
+  created_at: string
+  person?: Person
+}
+
+export interface MedicationWithPerson extends Medication {
+  person: Person
+}
+
+export interface MedicationDose {
+  id: string
+  medication_id: string
+  family_id: string
+  taken_at: string
+  notes: string | null
+  created_by: string | null
+  logged_at: string
+  created_at: string
+}
+
+export const FREQUENCY_LABELS: Record<MedicationFrequency, string> = {
+  once_daily: 'Once daily',
+  twice_daily: 'Twice daily',
+  three_daily: '3 times daily',
+  four_daily: '4 times daily',
+  every_8_hours: 'Every 8 hours',
+  every_12_hours: 'Every 12 hours',
+  as_needed: 'As needed',
+  other: 'Other',
+}
+
+export const MED_TYPE_LABELS: Record<MedicationType, string> = {
+  prescribed: 'Prescribed',
+  otc: 'Over the counter',
+}
