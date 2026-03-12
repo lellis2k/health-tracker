@@ -39,8 +39,18 @@ create table if not exists public.symptom_entries (
   notes        text,
   logged_at    timestamptz not null default now(),
   created_by   uuid references auth.users(id) on delete set null,
-  created_at   timestamptz not null default now()
+  created_at   timestamptz not null default now(),
+  -- Duration tracking (feeds future auto-episode detection)
+  onset_date   date,                                        -- when symptom actually began (null = not set / point-in-time log)
+  is_resolved  boolean not null default false,             -- true once symptom is resolved
+  resolved_at  timestamptz                                  -- when it was marked resolved
 );
+
+-- Migration: add columns if table already exists
+alter table public.symptom_entries
+  add column if not exists onset_date  date,
+  add column if not exists is_resolved boolean not null default false,
+  add column if not exists resolved_at timestamptz;
 
 -- Useful index for the main query pattern
 create index if not exists symptom_entries_family_logged

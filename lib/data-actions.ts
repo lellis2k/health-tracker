@@ -46,7 +46,8 @@ export async function addSymptomEntry(formData: FormData) {
   const symptomName = String(formData.get('symptom_name') ?? '').trim()
   const severity = parseInt(String(formData.get('severity') ?? ''), 10)
   const notes = String(formData.get('notes') ?? '').trim() || null
-  const loggedAt = String(formData.get('logged_at') ?? '')
+  const onsetDate = String(formData.get('onset_date') ?? '').trim() || null
+  const endedOn = String(formData.get('ended_on') ?? '').trim() || null
 
   if (!personId || !symptomName || isNaN(severity) || severity < 1 || severity > 5) {
     return { error: 'Missing required fields' }
@@ -77,8 +78,12 @@ export async function addSymptomEntry(formData: FormData) {
     symptom_name: symptomName,
     severity,
     notes,
-    logged_at: loggedAt || new Date().toISOString(),
+    logged_at: new Date().toISOString(),
     created_by: user.id,
+    onset_date: onsetDate,
+    is_resolved: !!endedOn,
+    // Noon UTC keeps the date correct across all UTC±12 timezones
+    resolved_at: endedOn ? endedOn + 'T12:00:00.000Z' : null,
   })
 
   if (error) {
@@ -122,6 +127,91 @@ export async function deleteSymptomEntry(entryId: string) {
   if (error) {
     return { error: error.message }
   }
+
+  revalidatePath('/dashboard')
+  return { success: true }
+}
+
+export async function resolveSymptomEntry(entryId: string, resolvedDate: string) {
+  const user = await getAuthUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const admin = createAdminClient()
+
+  const { data: entry, error: entryError } = await admin
+    .from('symptom_entries')
+    .select('family_id')
+    .eq('id', entryId)
+    .maybeSingle()
+
+  if (entryError || !entry) {
+    return { error: 'Entry not found' }
+  }
+
+  const { role, error: roleError } = await getFamilyRole(
+    admin,
+    user.id,
+    entry.family_id
+  )
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  const { error } = await admin
+    .from('symptom_entries')
+    .update({ is_resolved: true, resolved_at: resolvedDate + 'T12:00:00.000Z' })
+    .eq('id', entryId)
+    .eq('family_id', entry.family_id)
+
+  if (error) {
+    return { error: error.message }
+  }
+
+  revalidatePath('/dashboard')
+  return { success: true }
+}
+
+export async function updateSymptomEntry(entryId: string, formData: FormData) {
+  const user = await getAuthUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const admin = createAdminClient()
+
+  const { data: entry, error: entryError } = await admin
+    .from('symptom_entries')
+    .select('family_id')
+    .eq('id', entryId)
+    .maybeSingle()
+
+  if (entryError || !entry) return { error: 'Entry not found' }
+
+  const { role, error: roleError } = await getFamilyRole(admin, user.id, entry.family_id)
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  const symptomName = String(formData.get('symptom_name') ?? '').trim()
+  const severity = parseInt(String(formData.get('severity') ?? ''), 10)
+  const notes = String(formData.get('notes') ?? '').trim() || null
+  const onsetDate = String(formData.get('onset_date') ?? '').trim() || null
+  const endedOn = String(formData.get('ended_on') ?? '').trim() || null
+
+  if (!symptomName || isNaN(severity) || severity < 1 || severity > 5) {
+    return { error: 'Missing required fields' }
+  }
+
+  const { error } = await admin
+    .from('symptom_entries')
+    .update({
+      symptom_name: symptomName,
+      severity,
+      notes,
+      onset_date: onsetDate,
+      is_resolved: !!endedOn,
+      resolved_at: endedOn ? endedOn + 'T12:00:00.000Z' : null,
+    })
+    .eq('id', entryId)
+    .eq('family_id', entry.family_id)
+
+  if (error) return { error: error.message }
 
   revalidatePath('/dashboard')
   return { success: true }

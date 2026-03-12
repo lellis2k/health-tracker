@@ -30,6 +30,10 @@ export interface SymptomEntry {
   logged_at: string
   created_by: string | null
   created_at: string
+  // Duration tracking
+  onset_date: string | null    // ISO date "YYYY-MM-DD", null = point-in-time log
+  is_resolved: boolean
+  resolved_at: string | null   // ISO timestamptz
   // joined
   person?: Person
 }

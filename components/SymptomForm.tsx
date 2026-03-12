@@ -1,21 +1,15 @@
 'use client'
 
-import { useState, useTransition, useRef } from 'react'
+import { useState, useTransition } from 'react'
 import { addSymptomEntry } from '@/lib/data-actions'
 import type { Person } from '@/lib/types'
 import { SEVERITY_LABELS, SEVERITY_CLASSES } from '@/lib/types'
+import { todayDateString } from '@/lib/utils'
 
 interface SymptomFormProps {
   people: Person[]
   defaultPersonId: string
   pastSymptoms: string[]
-}
-
-function localDatetimeDefault() {
-  const now = new Date()
-  // Format: YYYY-MM-DDTHH:MM (local time, no timezone)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`
 }
 
 export default function SymptomForm({
@@ -27,11 +21,11 @@ export default function SymptomForm({
   const [symptomName, setSymptomName] = useState('')
   const [severity, setSeverity] = useState<number>(3)
   const [notes, setNotes] = useState('')
-  const [loggedAt, setLoggedAt] = useState(localDatetimeDefault)
+  const [onsetDate, setOnsetDate] = useState(todayDateString)
+  const [endedOn, setEndedOn] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [isPending, startTransition] = useTransition()
-  const formRef = useRef<HTMLFormElement>(null)
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -43,9 +37,8 @@ export default function SymptomForm({
     formData.set('symptom_name', symptomName)
     formData.set('severity', String(severity))
     formData.set('notes', notes)
-    // Convert local datetime to ISO string
-    const localDate = new Date(loggedAt)
-    formData.set('logged_at', localDate.toISOString())
+    formData.set('onset_date', onsetDate)
+    formData.set('ended_on', endedOn)
 
     startTransition(async () => {
       const result = await addSymptomEntry(formData)
@@ -56,7 +49,8 @@ export default function SymptomForm({
         setSymptomName('')
         setNotes('')
         setSeverity(3)
-        setLoggedAt(localDatetimeDefault())
+        setOnsetDate(todayDateString())
+        setEndedOn('')
         setTimeout(() => setSuccess(false), 3000)
       }
     })
@@ -64,6 +58,7 @@ export default function SymptomForm({
 
   const severityColor = SEVERITY_CLASSES[severity]
   const severityLabel = SEVERITY_LABELS[severity]
+  const today = todayDateString()
 
   return (
     <div className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-gray-200">
@@ -82,7 +77,7 @@ export default function SymptomForm({
         </div>
       )}
 
-      <form ref={formRef} onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4">
         {/* Person selector (tabs if few people, dropdown if many) */}
         {people.length > 1 && (
           <div>
@@ -179,21 +174,51 @@ export default function SymptomForm({
           </div>
         </div>
 
-        {/* Date/time */}
+        {/* Date range — Started on / Ended on */}
         <div>
-          <label
-            htmlFor="logged-at"
-            className="mb-1.5 block text-sm font-medium text-gray-700"
-          >
-            When
-          </label>
-          <input
-            id="logged-at"
-            type="datetime-local"
-            value={loggedAt}
-            onChange={(e) => setLoggedAt(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
-          />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label
+                htmlFor="onset-date"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
+                Started on
+              </label>
+              <input
+                id="onset-date"
+                type="date"
+                value={onsetDate}
+                onChange={(e) => {
+                  setOnsetDate(e.target.value)
+                  // Clear end date if it's now before the new start date
+                  if (endedOn && e.target.value > endedOn) setEndedOn('')
+                }}
+                max={today}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="ended-on"
+                className="mb-1.5 block text-sm font-medium text-gray-700"
+              >
+                Ended on{' '}
+                <span className="font-normal text-gray-400">(optional)</span>
+              </label>
+              <input
+                id="ended-on"
+                type="date"
+                value={endedOn}
+                onChange={(e) => setEndedOn(e.target.value)}
+                min={onsetDate || undefined}
+                max={today}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+              />
+            </div>
+          </div>
+          <p className="mt-1 text-xs text-gray-400">
+            Leave &ldquo;Ended on&rdquo; blank if the symptom is still ongoing.
+          </p>
         </div>
 
         {/* Notes */}
