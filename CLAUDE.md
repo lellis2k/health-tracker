@@ -49,6 +49,10 @@ RLS policies and `SECURITY DEFINER` helper functions remain in `schema.sql` for 
 - **people**: Individuals whose symptoms are tracked. May or may not have an auth account.
   - `user_id` is set when the person has an auth account; null for non-auth people (kids, etc.)
 - **symptom_entries**: Symptom log entries, scoped to both `person_id` and `family_id`
+  - `onset_date` (date, nullable): when the symptom actually started
+  - `is_resolved` (boolean, default false): whether the symptom has ended
+  - `resolved_at` (timestamptz, nullable): when it was resolved; stored as `YYYY-MM-DDT12:00:00.000Z` (noon UTC keeps date correct across UTC±12)
+  - `logged_at`: server-set system timestamp (now()) — used for list ordering only, never shown to users
 - All users in a family see all symptoms for all people in that family
 
 ### First-Time Setup Flow
@@ -109,8 +113,8 @@ app/
     family/page.tsx   Family management (people, rename family)
 components/
   AuthForm.tsx        Sign in UI (client, sign-up removed)
-  SymptomForm.tsx     Symptom logging form (client)
-  SymptomList.tsx     Symptom entry list with delete + error handling (client)
+  SymptomForm.tsx     Symptom logging form — "Started on" + "Ended on" date pair (client)
+  SymptomList.tsx     Symptom list: inline edit, inline resolve date picker, filters (client)
   FamilyManager.tsx   Family settings UI (client)
   Navbar.tsx          Top navigation bar (client)
   ServiceWorkerRegistration.tsx  Registers SW on mount (client)
@@ -120,6 +124,7 @@ lib/
     server.ts         Server Supabase client (createServerClient + cookies)
     admin.ts          Admin Supabase client (service_role key, bypasses RLS, server-only)
   types.ts            Shared TypeScript types/interfaces
+  utils.ts            Shared utilities (todayDateString — local-time YYYY-MM-DD)
   auth-actions.ts     Server actions: signIn, signOut
   data-actions.ts     Server actions: CRUD for symptoms, people, family (uses admin client)
 proxy.ts              Session refresh middleware (Next.js 16 convention)
@@ -168,3 +173,9 @@ _Important gotchas, decisions, and insights discovered during development._
 - **First-time setup order**: Must insert `family_members` BEFORE `people` — the people INSERT RLS policy checks for an existing family_members row.
 - **Admin client authorization pattern**: Every server action: (1) verify auth via SSR client `getUser()`, (2) check family role via `getFamilyRole()` with admin client, (3) perform mutation with admin client. The `admin.ts` module uses `import 'server-only'` to prevent accidental client-side import.
 - **Public sign-ups disabled**: Turn off "Allow new users to sign up" in Supabase for security. Invite users via Dashboard instead. Removed sign-up tab from UI.
+- **logged_at is server-only**: `logged_at` is set to `now()` server-side and used only for list ordering (DESC). It is never shown to users or accepted from form input. The user-facing date is `onset_date`.
+- **Date storage convention**: Resolved/onset dates from user input are stored as `YYYY-MM-DDT12:00:00.000Z` (noon UTC). This keeps the displayed date correct in any UTC±12 timezone. When displaying, always normalize to local midnight via `.setHours(0,0,0,0)`.
+- **todayDateString() — use local date parts**: `new Date().toISOString().slice(0,10)` returns the UTC date, which is wrong after 11pm in UTC+1. Use `lib/utils.ts#todayDateString()` which uses local `getFullYear/getMonth/getDate`.
+- **Backfill migration**: Ran `UPDATE symptom_entries SET onset_date = (logged_at AT TIME ZONE 'Europe/London')::date WHERE onset_date IS NULL` to migrate old entries to the duration tracking feature.
+- **Edit existing entries**: `updateSymptomEntry(entryId, formData)` server action updates symptom_name, severity, notes, onset_date, is_resolved, resolved_at. Inline edit form in SymptomList (pencil icon on hover).
+- **resolveSymptomEntry now takes a date**: Signature is `resolveSymptomEntry(entryId: string, resolvedDate: string)`. The "Mark resolved" button shows an inline date picker (defaults today, backdatable to onset_date) before calling the action.
