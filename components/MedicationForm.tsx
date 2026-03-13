@@ -5,6 +5,7 @@ import { addMedication } from '@/lib/medication-actions'
 import type { Person, MedicationFrequency, MedicationType } from '@/lib/types'
 import { FREQUENCY_LABELS } from '@/lib/types'
 import { todayDateString } from '@/lib/utils'
+import MedicationAutocomplete from './MedicationAutocomplete'
 
 interface MedicationFormProps {
   people: Person[]
@@ -133,23 +134,14 @@ export default function MedicationForm({
           >
             Medication
           </label>
-          <input
+          <MedicationAutocomplete
             id="medication-name"
-            type="text"
-            list="medication-suggestions"
             value={medicationName}
-            onChange={(e) => setMedicationName(e.target.value)}
+            onChange={setMedicationName}
+            pastMedications={pastMedications}
             required
-            placeholder="e.g. Paracetamol, Amoxicillin, Ibuprofen…"
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
           />
-          {pastMedications.length > 0 && (
-            <datalist id="medication-suggestions">
-              {pastMedications.map((name) => (
-                <option key={name} value={name} />
-              ))}
-            </datalist>
-          )}
         </div>
 
         {/* Dosage */}
