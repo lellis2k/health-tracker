@@ -252,6 +252,9 @@ export async function quickLogDose(formData: FormData) {
   const dosage = String(formData.get('dosage') ?? '').trim() || null
   const existingMedicationId = String(formData.get('existing_medication_id') ?? '').trim() || null
   const notes = String(formData.get('notes') ?? '').trim() || null
+  const takenAtRaw = String(formData.get('taken_at') ?? '').trim()
+  // takenAtRaw is a local datetime string (YYYY-MM-DDTHH:MM); convert to ISO or fall back to now
+  const takenAt = takenAtRaw ? new Date(takenAtRaw).toISOString() : new Date().toISOString()
 
   if (!personId || !medicationName) {
     return { error: 'Medication name is required' }
@@ -335,11 +338,11 @@ export async function quickLogDose(formData: FormData) {
     }
   }
 
-  // Log the dose at now()
+  // Log the dose
   const { error: doseError } = await admin.from('medication_doses').insert({
     medication_id: medicationId,
     family_id: person.family_id,
-    taken_at: new Date().toISOString(),
+    taken_at: takenAt,
     notes,
     created_by: user.id,
   })
