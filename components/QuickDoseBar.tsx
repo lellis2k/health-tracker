@@ -22,9 +22,17 @@ export default function QuickDoseBar({
   const [medicationName, setMedicationName] = useState('')
   const [dosage, setDosage] = useState('')
   const [selectedMedId, setSelectedMedId] = useState<string | null>(null)
+  const [showCustomTime, setShowCustomTime] = useState(false)
+  const [customTime, setCustomTime] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+
+  function localDatetimeNow() {
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
 
   // Active medications for the currently selected person
   const activeMedsForPerson: ActiveMedication[] = medications
@@ -65,6 +73,7 @@ export default function QuickDoseBar({
     formData.set('medication_name', medicationName.trim())
     if (dosage.trim()) formData.set('dosage', dosage.trim())
     if (selectedMedId) formData.set('existing_medication_id', selectedMedId)
+    if (showCustomTime && customTime) formData.set('taken_at', customTime)
 
     startTransition(async () => {
       const result = await quickLogDose(formData)
@@ -79,6 +88,8 @@ export default function QuickDoseBar({
         setMedicationName('')
         setDosage('')
         setSelectedMedId(null)
+        setShowCustomTime(false)
+        setCustomTime('')
         setTimeout(() => setSuccess(null), 3000)
       }
     })
@@ -148,6 +159,34 @@ export default function QuickDoseBar({
             {isPending ? 'Logging…' : 'Took it'}
           </button>
         </div>
+
+        {/* Optional custom time */}
+        {showCustomTime ? (
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              type="datetime-local"
+              value={customTime}
+              onChange={(e) => setCustomTime(e.target.value)}
+              max={localDatetimeNow()}
+              className="rounded-lg border border-gray-300 px-2.5 py-1.5 text-sm text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+            />
+            <button
+              type="button"
+              onClick={() => { setShowCustomTime(false); setCustomTime('') }}
+              className="text-xs text-gray-400 hover:text-gray-600"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setShowCustomTime(true); setCustomTime(localDatetimeNow()) }}
+            className="mt-1.5 text-xs text-gray-400 hover:text-gray-600"
+          >
+            + custom time
+          </button>
+        )}
       </form>
     </div>
   )
