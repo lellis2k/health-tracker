@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import DashboardTabs from '@/components/DashboardTabs'
 import SymptomForm from '@/components/SymptomForm'
 import SymptomList from '@/components/SymptomList'
+import QuickDoseBar from '@/components/QuickDoseBar'
 import MedicationForm from '@/components/MedicationForm'
 import MedicationList from '@/components/MedicationList'
 import type { Person, SymptomEntryWithPerson, MedicationWithPerson, MedicationDose } from '@/lib/types'
@@ -178,11 +179,25 @@ export default async function DashboardPage({
         </>
       ) : (
         <>
-          <MedicationForm
+          <QuickDoseBar
             people={(people ?? []) as Person[]}
             defaultPersonId={myPerson?.id ?? people?.[0]?.id ?? ''}
+            medications={medications}
             pastMedications={uniqueMedNames}
           />
+
+          <details className="mt-4">
+            <summary className="cursor-pointer rounded-lg px-3 py-2 text-sm font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-700">
+              + Add a medication course
+            </summary>
+            <div className="mt-2">
+              <MedicationForm
+                people={(people ?? []) as Person[]}
+                defaultPersonId={myPerson?.id ?? people?.[0]?.id ?? ''}
+                pastMedications={uniqueMedNames}
+              />
+            </div>
+          </details>
 
           <div className="mt-8">
             <h2 className="mb-4 text-lg font-semibold text-gray-800">

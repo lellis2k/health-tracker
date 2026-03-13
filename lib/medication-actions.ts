@@ -241,6 +241,115 @@ export async function logDose(formData: FormData) {
   return { success: true }
 }
 
+export async function quickLogDose(formData: FormData) {
+  const user = await getAuthUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const admin = createAdminClient()
+
+  const personId = String(formData.get('person_id') ?? '')
+  const medicationName = String(formData.get('medication_name') ?? '').trim()
+  const dosage = String(formData.get('dosage') ?? '').trim() || null
+  const existingMedicationId = String(formData.get('existing_medication_id') ?? '').trim() || null
+  const notes = String(formData.get('notes') ?? '').trim() || null
+
+  if (!personId || !medicationName) {
+    return { error: 'Medication name is required' }
+  }
+
+  // Look up person to get family_id
+  const { data: person, error: personError } = await admin
+    .from('people')
+    .select('family_id')
+    .eq('id', personId)
+    .single()
+
+  if (personError || !person) return { error: 'Person not found' }
+
+  const { role, error: roleError } = await getFamilyRole(admin, user.id, person.family_id)
+  if (roleError) return { error: roleError }
+  if (!role) return { error: 'Unauthorized' }
+
+  let medicationId: string
+
+  if (existingMedicationId) {
+    // Verify the existing medication belongs to this family and is active
+    const { data: med, error: medError } = await admin
+      .from('medications')
+      .select('id, is_active')
+      .eq('id', existingMedicationId)
+      .eq('family_id', person.family_id)
+      .maybeSingle()
+
+    if (medError || !med) return { error: 'Medication not found' }
+    if (!med.is_active) return { error: 'Medication is discontinued' }
+    medicationId = med.id
+  } else {
+    // Find or create: look for active medication with this name for this person
+    const { data: matches, error: matchError } = await admin
+      .from('medications')
+      .select('id, medication_name, dosage')
+      .eq('person_id', personId)
+      .eq('family_id', person.family_id)
+      .eq('is_active', true)
+      .ilike('medication_name', medicationName)
+
+    if (matchError) return { error: matchError.message }
+
+    if (matches && matches.length === 1) {
+      // Exactly one match — use it
+      medicationId = matches[0].id
+    } else if (matches && matches.length > 1) {
+      // Multiple matches — return them for client disambiguation
+      return {
+        error: 'multiple_matches',
+        matches: matches.map((m) => ({
+          id: m.id,
+          medication_name: m.medication_name,
+          dosage: m.dosage,
+        })),
+      }
+    } else {
+      // No match — create a new medication with OTC defaults
+      const today = new Date()
+      const startDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+
+      const { data: newMed, error: createError } = await admin
+        .from('medications')
+        .insert({
+          person_id: personId,
+          family_id: person.family_id,
+          medication_name: medicationName,
+          dosage,
+          frequency: 'as_needed',
+          med_type: 'otc',
+          start_date: startDate,
+          is_active: true,
+          created_by: user.id,
+        })
+        .select('id')
+        .single()
+
+      if (createError || !newMed) return { error: createError?.message ?? 'Failed to create medication' }
+      medicationId = newMed.id
+    }
+  }
+
+  // Log the dose at now()
+  const { error: doseError } = await admin.from('medication_doses').insert({
+    medication_id: medicationId,
+    family_id: person.family_id,
+    taken_at: new Date().toISOString(),
+    notes,
+    created_by: user.id,
+  })
+
+  if (doseError) return { error: doseError.message }
+
+  revalidatePath('/dashboard')
+  return { success: true, medicationId, medicationName }
+}
+
 export async function deleteDose(doseId: string) {
   const user = await getAuthUser()
   if (!user) return { error: 'Not authenticated' }

@@ -3,11 +3,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MEDICATION_NAMES } from '@/lib/medication-names'
 
+export interface ActiveMedication {
+  id: string
+  medication_name: string
+  dosage: string | null
+}
+
 interface MedicationAutocompleteProps {
   value: string
   onChange: (value: string) => void
+  /** Currently active medications for the selected person (shown first with dosage) */
+  activeMedications?: ActiveMedication[]
   /** Previously-used medication names (shown with priority) */
   pastMedications?: string[]
+  /** Callback when user selects an active medication (provides ID + dosage for auto-fill) */
+  onSelectMedication?: (med: ActiveMedication) => void
   placeholder?: string
   className?: string
   id?: string
@@ -15,10 +25,21 @@ interface MedicationAutocompleteProps {
   required?: boolean
 }
 
+type SuggestionType = 'active' | 'past' | 'nhs'
+
+interface Suggestion {
+  label: string
+  sublabel?: string
+  type: SuggestionType
+  activeMed?: ActiveMedication
+}
+
 export default function MedicationAutocomplete({
   value,
   onChange,
+  activeMedications = [],
   pastMedications = [],
+  onSelectMedication,
   placeholder = 'e.g. Paracetamol, Amoxicillin…',
   className = '',
   id,
@@ -35,18 +56,35 @@ export default function MedicationAutocomplete({
     if (!value || value.length < 1) return []
     const lower = value.toLowerCase()
     const seen = new Set<string>()
-    const results: { name: string; isPast: boolean }[] = []
+    const results: Suggestion[] = []
 
-    // Past medications first (user history)
-    for (const med of pastMedications) {
-      const medLower = med.toLowerCase()
-      if (medLower.includes(lower) && !seen.has(medLower)) {
-        seen.add(medLower)
-        results.push({ name: med, isPast: true })
+    // 1. Active medications first (with dosage)
+    for (const med of activeMedications) {
+      const medLower = med.medication_name.toLowerCase()
+      // Unique key includes dosage to allow "Paracetamol 500mg" and "Paracetamol 1000mg"
+      const key = `${medLower}::${(med.dosage ?? '').toLowerCase()}`
+      if (medLower.includes(lower) && !seen.has(key)) {
+        seen.add(key)
+        results.push({
+          label: med.medication_name,
+          sublabel: med.dosage ?? undefined,
+          type: 'active',
+          activeMed: med,
+        })
       }
     }
 
-    // Then NHS list: starts-with first, then contains
+    // 2. Past medication names (not already shown as active)
+    const activeNames = new Set(activeMedications.map((m) => m.medication_name.toLowerCase()))
+    for (const med of pastMedications) {
+      const medLower = med.toLowerCase()
+      if (medLower.includes(lower) && !activeNames.has(medLower) && !seen.has(medLower)) {
+        seen.add(medLower)
+        results.push({ label: med, type: 'past' })
+      }
+    }
+
+    // 3. NHS list: starts-with first, then contains
     const startsWithMatches: string[] = []
     const containsMatches: string[] = []
     for (const med of MEDICATION_NAMES) {
@@ -60,15 +98,13 @@ export default function MedicationAutocomplete({
     }
     for (const med of [...startsWithMatches, ...containsMatches]) {
       seen.add(med.toLowerCase())
-      results.push({ name: med, isPast: false })
+      results.push({ label: med, type: 'nhs' })
     }
 
     return results.slice(0, 8)
-  }, [value, pastMedications])
+  }, [value, activeMedications, pastMedications])
 
   const showDropdown = isOpen && suggestions.length > 0
-  const hasPastSection = suggestions.some((s) => s.isPast)
-  const hasNhsSection = suggestions.some((s) => !s.isPast)
 
   // Close on outside click
   useEffect(() => {
@@ -90,13 +126,16 @@ export default function MedicationAutocomplete({
   }, [highlightIndex])
 
   const selectSuggestion = useCallback(
-    (name: string) => {
-      onChange(name)
+    (suggestion: Suggestion) => {
+      onChange(suggestion.label)
+      if (suggestion.type === 'active' && suggestion.activeMed && onSelectMedication) {
+        onSelectMedication(suggestion.activeMed)
+      }
       setIsOpen(false)
       setHighlightIndex(-1)
       inputRef.current?.focus()
     },
-    [onChange]
+    [onChange, onSelectMedication]
   )
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -110,11 +149,17 @@ export default function MedicationAutocomplete({
       setHighlightIndex((i) => (i > 0 ? i - 1 : suggestions.length - 1))
     } else if (e.key === 'Enter' && highlightIndex >= 0) {
       e.preventDefault()
-      selectSuggestion(suggestions[highlightIndex].name)
+      selectSuggestion(suggestions[highlightIndex])
     } else if (e.key === 'Escape') {
       setIsOpen(false)
       setHighlightIndex(-1)
     }
+  }
+
+  const typeLabel: Record<SuggestionType, string> = {
+    active: 'active',
+    past: 'used before',
+    nhs: '',
   }
 
   return (
@@ -154,28 +199,28 @@ export default function MedicationAutocomplete({
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
         >
           {suggestions.map((suggestion, i) => {
-            // Highlight the matching portion
+            // Highlight the matching portion in the label
             const lower = value.toLowerCase()
-            const idx = suggestion.name.toLowerCase().indexOf(lower)
-            const before = suggestion.name.slice(0, idx)
-            const match = suggestion.name.slice(idx, idx + value.length)
-            const after = suggestion.name.slice(idx + value.length)
+            const idx = suggestion.label.toLowerCase().indexOf(lower)
+            const before = suggestion.label.slice(0, idx)
+            const match = suggestion.label.slice(idx, idx + value.length)
+            const after = suggestion.label.slice(idx + value.length)
 
-            // Show section divider between past and NHS suggestions
-            const showDivider =
-              i > 0 &&
-              !suggestion.isPast &&
-              suggestions[i - 1].isPast
+            // Show section divider between different types
+            const prevType = i > 0 ? suggestions[i - 1].type : null
+            const showDivider = prevType !== null && prevType !== suggestion.type
+
+            const badge = typeLabel[suggestion.type]
 
             return (
               <li
-                key={suggestion.name}
+                key={`${suggestion.type}-${suggestion.label}-${suggestion.sublabel ?? ''}`}
                 id={`med-option-${i}`}
                 role="option"
                 aria-selected={i === highlightIndex}
                 onMouseDown={(e) => {
                   e.preventDefault()
-                  selectSuggestion(suggestion.name)
+                  selectSuggestion(suggestion)
                 }}
                 onMouseEnter={() => setHighlightIndex(i)}
                 className={`cursor-pointer px-3 py-1.5 text-sm ${
@@ -191,10 +236,19 @@ export default function MedicationAutocomplete({
                     {before}
                     <span className="font-semibold">{match}</span>
                     {after}
+                    {suggestion.sublabel && (
+                      <span className="ml-1 text-gray-400">· {suggestion.sublabel}</span>
+                    )}
                   </span>
-                  {suggestion.isPast && (
-                    <span className="ml-auto shrink-0 text-[10px] text-gray-400">
-                      used before
+                  {badge && (
+                    <span
+                      className={`ml-auto shrink-0 text-[10px] ${
+                        suggestion.type === 'active'
+                          ? 'font-medium text-teal-600'
+                          : 'text-gray-400'
+                      }`}
+                    >
+                      {badge}
                     </span>
                   )}
                 </span>
