@@ -211,7 +211,12 @@ export default function MedicationList({
     setError(null)
     const formData = new FormData()
     formData.set('medication_id', medId)
-    formData.set('taken_at', doseLogMode.customTime || new Date().toISOString())
+    formData.set(
+      'taken_at',
+      doseLogMode.customTime
+        ? new Date(doseLogMode.customTime).toISOString()
+        : new Date().toISOString()
+    )
     formData.set('notes', doseLogMode.notes)
     startDoseTransition(async () => {
       const result = await logDose(formData)
@@ -654,9 +659,7 @@ export default function MedicationList({
                           onChange={(e) =>
                             setDoseLogMode({
                               ...doseLogMode,
-                              customTime: e.target.value
-                                ? new Date(e.target.value).toISOString()
-                                : '',
+                              customTime: e.target.value,
                             })
                           }
                           className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-900 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-200"
