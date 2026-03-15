@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import DashboardTabs from '@/components/DashboardTabs'
+import NotificationSettings from '@/components/NotificationSettings'
 import SymptomForm from '@/components/SymptomForm'
 import SymptomList from '@/components/SymptomList'
 import QuickDoseBar from '@/components/QuickDoseBar'
@@ -157,6 +158,7 @@ export default async function DashboardPage({
 
   return (
     <div className="mx-auto max-w-xl px-4 py-6 pb-12">
+      <NotificationSettings />
       <DashboardTabs activeTab={activeTab} />
 
       {activeTab === 'symptoms' ? (
