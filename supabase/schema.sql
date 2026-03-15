@@ -302,3 +302,19 @@ create policy "medication_doses_update" on public.medication_doses
 create policy "medication_doses_delete" on public.medication_doses
   for delete to authenticated
   using (public.is_family_member(family_id));
+
+-- ============================================================
+-- PUSH NOTIFICATIONS (PoC)
+-- ============================================================
+
+create table if not exists public.push_subscriptions (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  family_id  uuid not null references public.families(id) on delete cascade,
+  endpoint   text not null unique,
+  auth_key   text not null,
+  p256dh_key text not null,
+  created_at timestamptz not null default now()
+);
+
+grant all on public.push_subscriptions to authenticated, anon, service_role;

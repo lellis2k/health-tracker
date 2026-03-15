@@ -27,6 +27,18 @@ self.addEventListener('activate', (event) => {
   self.clients.claim()
 })
 
+// Push: display notification when a push message arrives from the server
+self.addEventListener('push', (event) => {
+  const data = event.data?.json() ?? { title: 'Health Tracker', body: 'Notification' }
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icon',
+      badge: '/icon',
+    })
+  )
+})
+
 // Fetch: network-first strategy (app always needs auth / fresh data)
 // Structure is here so offline caching can be added per-route later
 self.addEventListener('fetch', (event) => {
